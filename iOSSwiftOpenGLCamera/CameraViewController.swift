@@ -13,8 +13,8 @@ import AVFoundation
 class CameraViewController: UIViewController, CameraSessionControllerDelegate {
 	
 	var cameraSessionController: CameraSessionController!
-	@IBOutlet var openGLView: OpenGLView!
-	@IBOutlet var togglerSwitch: UISwitch
+	@IBOutlet weak var openGLView: OpenGLView!
+	@IBOutlet weak var togglerSwitch: UISwitch!
 	
 	
 	/* Lifecycle
@@ -25,15 +25,16 @@ class CameraViewController: UIViewController, CameraSessionControllerDelegate {
 		
 		cameraSessionController = CameraSessionController()
 		cameraSessionController.sessionDelegate = self
+    togglerSwitch.addTarget(self, action: #selector(type(of: self).toggleShader(_:)), for: .valueChanged)
 	}
 	
-	override func viewWillAppear(animated: Bool) {
+	override func viewWillAppear(_ animated: Bool) {
 		super.viewWillAppear(animated)
 		
 		cameraSessionController.startCamera()
 	}
 	
-	override func viewWillDisappear(animated: Bool) {
+	override func viewWillDisappear(_ animated: Bool) {
 		super.viewWillDisappear(animated)
 		
 		cameraSessionController.teardownCamera()
@@ -43,12 +44,12 @@ class CameraViewController: UIViewController, CameraSessionControllerDelegate {
 	/* Instance Methods
 	------------------------------------------*/
 	
-	@IBAction func toggleShader(sender: AnyObject) {
-		openGLView.shouldShowShader(togglerSwitch.on)
+	@IBAction func toggleShader(_ sender: UISlider) {
+		openGLView.shouldShowShader(show: togglerSwitch.isOn)
 	}
 	
-	func cameraSessionDidOutputSampleBuffer(sampleBuffer: CMSampleBuffer!) {
-		openGLView.updateUsingSampleBuffer(sampleBuffer)
+	func cameraSessionDidOutputSampleBuffer(_ sampleBuffer: CMSampleBuffer!) {
+		openGLView.updateUsingSampleBuffer(sampleBuffer: sampleBuffer)
 	}
 	
 }

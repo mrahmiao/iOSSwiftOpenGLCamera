@@ -12,17 +12,17 @@ import CoreMedia
 import CoreImage
 
 @objc protocol CameraSessionControllerDelegate {
-	@optional func cameraSessionDidOutputSampleBuffer(sampleBuffer: CMSampleBuffer!)
+	@objc optional func cameraSessionDidOutputSampleBuffer(_ sampleBuffer: CMSampleBuffer!)
 }
 
 class CameraSessionController: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 	
 	var session: AVCaptureSession!
-	var sessionQueue: dispatch_queue_t!
+	var sessionQueue: DispatchQueue!
 	var videoDeviceInput: AVCaptureDeviceInput!
 	var videoDeviceOutput: AVCaptureVideoDataOutput!
 	var stillImageOutput: AVCaptureStillImageOutput!
-	var runtimeErrorHandlingObserver: AnyObject?
+	var runtimeErrorHandlingObserver: Any!
 	
 	var sessionDelegate: CameraSessionControllerDelegate?
 	
@@ -30,26 +30,25 @@ class CameraSessionController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 	/* Class Methods
 	------------------------------------------*/
 	
-	class func deviceWithMediaType(mediaType: NSString, position: AVCaptureDevicePosition) -> AVCaptureDevice {
-		var devices: NSArray = AVCaptureDevice.devicesWithMediaType(mediaType)
-		var captureDevice: AVCaptureDevice = devices.firstObject as AVCaptureDevice
-		
-		for object:AnyObject in devices {
-			let device = object as AVCaptureDevice
-			if (device.position == position) {
-				captureDevice = device
-				break
-			}
-		}
-		
-		return captureDevice
+	class func deviceWithMediaType(mediaType: String, position: AVCaptureDevicePosition) -> AVCaptureDevice? {
+
+    guard let devices = AVCaptureDevice.devices(withMediaType: mediaType) as? [AVCaptureDevice] else {
+      return nil
+    }
+
+    for device in devices where device.position == position {
+      return device
+    }
+
+    return nil
+
 	}
 	
 	
 	/* Lifecycle
 	------------------------------------------*/
 	
-	init() {
+	override init() {
 		super.init();
 		
 		session = AVCaptureSession()
@@ -57,16 +56,17 @@ class CameraSessionController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 		session.sessionPreset = AVCaptureSessionPresetMedium;
 		
 		authorizeCamera();
-		
-		sessionQueue = dispatch_queue_create("CameraSessionController Session", DISPATCH_QUEUE_SERIAL)
-		
-		dispatch_async(sessionQueue, {
-			self.session.beginConfiguration()
-			self.addVideoInput()
-			self.addVideoOutput()
-			self.addStillImageOutput()
-			self.session.commitConfiguration()
-		})
+
+    sessionQueue = DispatchQueue(label: "CameraSessionController Session")
+
+    sessionQueue.async { [unowned self] in
+      self.session.beginConfiguration()
+      self.addVideoInput()
+      self.addVideoOutput()
+      self.addStillImageOutput()
+      self.session.commitConfiguration()
+    }
+
 	}
 	
 	
@@ -74,45 +74,47 @@ class CameraSessionController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 	------------------------------------------*/
 	
 	func authorizeCamera() {
-		AVCaptureDevice.requestAccessForMediaType(AVMediaTypeVideo, completionHandler: {
-			(granted: Bool) -> Void in
+		AVCaptureDevice.requestAccess(forMediaType: AVMediaTypeVideo) { isGranted in
 			// If permission hasn't been granted, notify the user.
-			if !granted {
-				dispatch_async(dispatch_get_main_queue(), {
-					UIAlertView(
-						title: "Could not use camera!",
-						message: "This application does not have permission to use camera. Please update your privacy settings.",
-						delegate: self,
-						cancelButtonTitle: "OK").show()
-					})
-			}
-		});
+			if !isGranted {
+        DispatchQueue.main.async {
+          UIAlertView(
+            title: "Could not use camera!",
+            message: "This application does not have permission to use camera. Please update your privacy settings.",
+            delegate: self,
+            cancelButtonTitle: "OK").show()
+        }
+      }
+    }
 	}
 	
-	func addVideoInput() -> Bool {
-		var success: Bool = false
-		var error: NSError?
+	func addVideoInput() {
 		
-		var videoDevice: AVCaptureDevice = CameraSessionController.deviceWithMediaType(AVMediaTypeVideo, position: AVCaptureDevicePosition.Back)
-		videoDeviceInput = AVCaptureDeviceInput.deviceInputWithDevice(videoDevice, error: &error) as AVCaptureDeviceInput;
-		if !error {
-			if session.canAddInput(videoDeviceInput) {
-				session.addInput(videoDeviceInput)
-				success = true
-			}
-		}
-		
-		return success
+    guard let videoDevice: AVCaptureDevice = CameraSessionController.deviceWithMediaType(mediaType: AVMediaTypeVideo, position: .back) else {
+      fatalError("No camera")
+    }
+
+    let input: AVCaptureDeviceInput
+    do {
+      input = try AVCaptureDeviceInput(device: videoDevice)
+    } catch {
+      fatalError("No device input")
+    }
+
+    if session.canAddInput(input) {
+      session.addInput(input)
+    }
 	}
 	
 	func addVideoOutput() {
 		
 		videoDeviceOutput = AVCaptureVideoDataOutput()
 		
-		videoDeviceOutput.videoSettings = NSDictionary(object: Int(kCVPixelFormatType_32BGRA), forKey:kCVPixelBufferPixelFormatTypeKey)
-		
+		videoDeviceOutput.videoSettings = [
+      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+    ]
+
 		videoDeviceOutput.alwaysDiscardsLateVideoFrames = true
-		
 		videoDeviceOutput.setSampleBufferDelegate(self, queue: sessionQueue)
 		
 		if session.canAddOutput(videoDeviceOutput) {
@@ -130,86 +132,98 @@ class CameraSessionController: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 	}
 	
 	func startCamera() {
-		dispatch_async(sessionQueue, {
-			var weakSelf: CameraSessionController? = self
-			self.runtimeErrorHandlingObserver = NSNotificationCenter.defaultCenter().addObserverForName(AVCaptureSessionRuntimeErrorNotification, object: self.sessionQueue, queue: nil, usingBlock: {
-				(note: NSNotification!) -> Void in
-				
-				let strongSelf: CameraSessionController = weakSelf!
-				
-				dispatch_async(strongSelf.sessionQueue, {
-					strongSelf.session.startRunning()
-					})
-				})
-			self.session.startRunning()
-		})
+    sessionQueue.async { [weak self] in
+
+      guard let strongSelf = self else {
+        return
+      }
+
+      strongSelf.runtimeErrorHandlingObserver = NotificationCenter.default.addObserver(forName: .AVCaptureSessionRuntimeError, object: strongSelf.sessionQueue, queue: nil) { (note: Notification) in
+
+        strongSelf.sessionQueue.async {
+          strongSelf.session.startRunning()
+        }
+
+      }
+
+			self?.session.startRunning()
+		}
 	}
 	
 	func teardownCamera() {
-		dispatch_async(sessionQueue, {
-			self.session.stopRunning()
-			NSNotificationCenter.defaultCenter().removeObserver(self.runtimeErrorHandlingObserver)
-		})
+    sessionQueue.async { [weak self] in
+      guard let strongSelf = self else {
+        return
+      }
+
+      strongSelf.session.stopRunning()
+      NotificationCenter.default.removeObserver(strongSelf.runtimeErrorHandlingObserver)
+    }
 	}
 	
 	func focusAndExposeAtPoint(point: CGPoint) {
-		dispatch_async(sessionQueue, {
-			var device: AVCaptureDevice = self.videoDeviceInput.device
-			var error: NSErrorPointer!
-			
-			if device.lockForConfiguration(error) {
-				if device.focusPointOfInterestSupported && device.isFocusModeSupported(AVCaptureFocusMode.AutoFocus) {
-					device.focusPointOfInterest = point
-					device.focusMode = AVCaptureFocusMode.AutoFocus
-				}
-				
-				if device.exposurePointOfInterestSupported && device.isExposureModeSupported(AVCaptureExposureMode.AutoExpose) {
-					device.exposurePointOfInterest = point
-					device.exposureMode = AVCaptureExposureMode.AutoExpose
-				}
-				
-				device.unlockForConfiguration()
-			}
-			else {
-				// TODO: Log error.
-			}
-		})
-	}
-	
-	func captureImage(completion:((image: UIImage?, error: NSError?) -> Void)?) {
-		if !completion || !stillImageOutput {
-			return
-		}
-		
-		dispatch_async(sessionQueue, {
-			self.stillImageOutput.captureStillImageAsynchronouslyFromConnection(
-				self.stillImageOutput.connectionWithMediaType(AVMediaTypeVideo),completionHandler: {
-					(imageDataSampleBuffer: CMSampleBuffer?, error: NSError?) -> Void in
-					if !imageDataSampleBuffer || error {
-						completion!(image:nil, error:nil)
-					}
-					else if imageDataSampleBuffer {
-						var imageData: NSData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(imageDataSampleBuffer?)
-						var image: UIImage = UIImage(data: imageData)
-						completion!(image:image, error:nil)
-					}
-				}
-			)
-		})
-	}
-	
+    sessionQueue.async { [unowned self] in
+      guard let device = self.videoDeviceInput.device else {
+        fatalError(#function)
+      }
+
+      do {
+        try device.lockForConfiguration()
+      } catch {
+        fatalError(String(describing: error))
+      }
+
+      defer {
+        device.unlockForConfiguration()
+      }
+
+      if device.isFocusPointOfInterestSupported && device.isFocusModeSupported(.autoFocus) {
+        device.focusPointOfInterest = point
+        device.focusMode = .autoFocus
+      }
+
+      if device.isExposurePointOfInterestSupported && device.isExposureModeSupported(.autoExpose) {
+        device.exposurePointOfInterest = point
+        device.exposureMode = .autoExpose
+      }
+    }
+  }
+
+  func captureImage(completion: ((UIImage?, Error?) -> Void)? = nil) {
+
+    sessionQueue.async { [unowned self] in
+
+      let connection = self.stillImageOutput.connection(withMediaType: AVMediaTypeVideo)
+
+      self.stillImageOutput.captureStillImageAsynchronously(from: connection) { buffer, error in
+
+        guard error == nil else {
+          completion?(nil, nil)
+          return
+        }
+
+        guard let buffer = buffer, let jpegData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(buffer), let image = UIImage(data: jpegData) else {
+          completion?(nil, nil)
+          return
+        }
+
+        completion?(image, nil)
+      }
+    }
+  }
+
 	
 	/* AVCaptureVideoDataOutput Delegate
 	------------------------------------------*/
 	
-	func captureOutput(captureOutput: AVCaptureOutput!, didOutputSampleBuffer sampleBuffer: CMSampleBuffer!, fromConnection connection: AVCaptureConnection!) {
-		if (connection.supportsVideoOrientation){
-			//connection.videoOrientation = AVCaptureVideoOrientation.PortraitUpsideDown
-			connection.videoOrientation = AVCaptureVideoOrientation.Portrait
+	func captureOutput(_ captureOutput: AVCaptureOutput!, didOutputSampleBuffer sampleBuffer: CMSampleBuffer!, from connection: AVCaptureConnection!) {
+		if (connection.isVideoOrientationSupported){
+			//connection.videoOrientation = .portraitUpsideDown
+			connection.videoOrientation = .portrait
 		}
-		if (connection.supportsVideoMirroring) {
+		if (connection.isVideoMirroringSupported) {
 			//connection.videoMirrored = true
-			connection.videoMirrored = false
+			connection.isVideoMirrored = false
 		}
 		sessionDelegate?.cameraSessionDidOutputSampleBuffer?(sampleBuffer)
 	}
